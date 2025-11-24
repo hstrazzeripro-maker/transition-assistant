@@ -5,13 +5,18 @@ Application Transition Assistant - Version Cloud (corrigée, Google Docs + PDF u
 import streamlit as st
 import os
 import json
+from typing import Optional
 
 from langchain_google_community import GoogleDriveLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_huggingface import HuggingFaceEndpoint  # ✅ nouveau import
+from langchain_huggingface import HuggingFaceEndpoint
 from langchain_community.vectorstores import FAISS
 from langchain_core.prompts import ChatPromptTemplate
+
+# Imports pour le diagnostic Drive
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
 
 # --- CONFIGURATION CLOUD / SECRETS ---
 IS_CLOUD = 'STREAMLIT_CLOUD' in os.environ or ('google_credentials' in st.secrets)
@@ -28,6 +33,14 @@ else:
     HUGGINGFACE_TOKEN = os.getenv('HUGGINGFACEHUB_API_TOKEN', None)
 
 SERVICE_ACCOUNT_FILE = "credentials.json"
+
+# --- UTILITAIRES ---
+def mask(s: Optional[str], keep_start: int = 6, keep_end: int = 6) -> Optional[str]:
+    if not s:
+        return None
+    if len(s) <= keep_start + keep_end:
+        return "*****"
+    return s[:keep_start] + "..." + s[-keep_end:]
 
 # --- CONFIGURATION DU MODÈLE ---
 @st.cache_resource
@@ -75,7 +88,7 @@ def initialize_knowledge_base():
             )
             docs = loader.load()
 
-            # 👉 Diagnostic : affichage des fichiers trouvés
+            # Diagnostic : affichage des fichiers trouvés
             st.write(f"📂 Nombre de documents trouvés: {len(docs)}")
             for d in docs:
                 st.write("➡️ Fichier:", d.metadata)
@@ -104,8 +117,70 @@ def initialize_knowledge_base():
             st.error(f"❌ Erreur lors de l'initialisation: {str(e)}")
             return None
 
+# --- DIAGNOSTIC GOOGLE DRIVE (UI) ---
+def drive_diagnostic_ui():
+    st.sidebar.header("Diagnostic Google Drive")
+    st.sidebar.write("Utilise ce diagnostic pour vérifier que `st.secrets` et le compte de service sont corrects.")
+    if st.sidebar.button("Run Drive diagnostic"):
+        st.subheader("Diagnostic secrets et test Google Drive")
+        app_conf = st.secrets.get("app_config", {})
+        google_creds = st.secrets.get("google_credentials", {})
+
+        st.write("app_config keys:", list(app_conf.keys()))
+        st.write("google_credentials keys:", list(google_creds.keys()))
+
+        st.write("Valeurs masquées utiles pour debug")
+        st.write("GOOGLE_DRIVE_FOLDER_ID:", mask(app_conf.get("GOOGLE_DRIVE_FOLDER_ID", "")))
+        st.write("HUGGINGFACE_TOKEN:", mask(app_conf.get("HUGGINGFACE_TOKEN", "")))
+        st.write("client_email:", mask(google_creds.get("client_email", "")))
+        st.write("project_id:", mask(google_creds.get("project_id", "")))
+        st.write("private_key_id:", mask(google_creds.get("private_key_id", "")))
+
+        # Écrire temporairement credentials.json depuis st.secrets si présent
+        if google_creds:
+            try:
+                with open(SERVICE_ACCOUNT_FILE, "w") as f:
+                    json.dump(google_creds, f)
+                st.success("Fichier credentials.json écrit localement pour le test")
+            except Exception as e:
+                st.error(f"Impossible d'écrire credentials.json: {e}")
+                return
+
+        FOLDER_ID_LOCAL = app_conf.get("GOOGLE_DRIVE_FOLDER_ID", "")
+        if not FOLDER_ID_LOCAL:
+            st.warning("Aucun FOLDER_ID trouvé dans app_config. Vérifie st.secrets.")
+            return
+
+        st.info(f"Test de listing du dossier {mask(FOLDER_ID_LOCAL, 8, 8)}")
+
+        SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
+        try:
+            creds = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+            service = build("drive", "v3", credentials=creds)
+
+            resp = service.files().list(
+                q=f"'{FOLDER_ID_LOCAL}' in parents and trashed = false",
+                fields="files(id,name,mimeType)",
+                pageSize=100,
+                includeItemsFromAllDrives=True,
+                supportsAllDrives=True
+            ).execute()
+
+            files = resp.get("files", [])
+            st.write("Nombre de fichiers trouvés:", len(files))
+            if files:
+                st.table([{"id": f["id"], "name": f["name"], "mimeType": f["mimeType"]} for f in files])
+            else:
+                st.warning("Aucun fichier trouvé. Vérifie : Folder ID, partage du dossier avec client_email, types de fichiers (Google Docs / PDF).")
+
+        except Exception as e:
+            st.error(f"Erreur lors du test Drive: {e}")
+
 # --- INTERFACE PRINCIPALE ---
 st.set_page_config(page_title="Transition Assistant | Elite Athletes", page_icon="🏅", layout="wide")
+
+# Affiche le diagnostic dans la sidebar (bouton pour lancer)
+drive_diagnostic_ui()
 
 llm = get_llm()
 if llm:
