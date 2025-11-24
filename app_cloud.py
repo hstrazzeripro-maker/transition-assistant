@@ -1,11 +1,13 @@
 """
-Application Transition Assistant - Version Cloud (corrigée, Google Docs + PDF uniquement, diagnostic Google Drive)
+Application Transition Assistant - Version Cloud
+Inclut diagnostic Google Drive et extraction texte des PDF avec pypdf
 """
 
 import streamlit as st
 import os
 import json
 from typing import Optional
+from io import BytesIO
 
 from langchain_google_community import GoogleDriveLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -13,16 +15,17 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_huggingface import HuggingFaceEndpoint
 from langchain_community.vectorstores import FAISS
 from langchain_core.prompts import ChatPromptTemplate
+from langchain.schema import Document
 
-# Imports pour le diagnostic Drive
+# Imports Drive + PDF
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+from pypdf import PdfReader
 
 # --- CONFIGURATION CLOUD / SECRETS ---
 IS_CLOUD = 'STREAMLIT_CLOUD' in os.environ or ('google_credentials' in st.secrets)
 
 if IS_CLOUD:
-    # st.secrets['google_credentials'] est souvent un AttrDict ; on le convertit en dict pur quand nécessaire
     creds_raw = st.secrets.get('google_credentials', {})
     try:
         creds_dict = json.loads(json.dumps(creds_raw)) if creds_raw else {}
@@ -34,6 +37,8 @@ else:
     creds_dict = {}
     FOLDER_ID = os.getenv('GOOGLE_DRIVE_FOLDER_ID', 'VOTRE_FOLDER_ID')
     HUGGINGFACE_TOKEN = os.getenv('HUGGINGFACEHUB_API_TOKEN', None)
+
+SERVICE_ACCOUNT_FILE = "credentials.json"
 
 # --- UTILITAIRES ---
 def mask(s: Optional[str], keep_start: int = 6, keep_end: int = 6) -> Optional[str]:
@@ -72,42 +77,96 @@ def get_llm():
             st.warning("⚠️ Ni Hugging Face ni Ollama configurés")
             return None
 
-# --- INITIALISATION DE LA BASE DE CONNAISSANCES (avec diagnostic) ---
+# --- INITIALISATION DE LA BASE DE CONNAISSANCES ---
 @st.cache_resource
 def initialize_knowledge_base():
-    # On utilise creds_dict (dict pur) si disponible, sinon on essaie de lire credentials.json local
-    service_account_info = creds_dict if creds_dict else None
-    if not service_account_info and not os.path.exists("credentials.json"):
-        st.error("⚠️ Aucun credentials disponible (st.secrets['google_credentials'] manquant et credentials.json absent).")
+    # 1) Forcer l’écriture locale du credentials.json depuis st.secrets si dispo
+    google_creds_raw = st.secrets.get("google_credentials", {})
+    try:
+        google_creds = json.loads(json.dumps(google_creds_raw)) if google_creds_raw else {}
+    except Exception:
+        google_creds = dict(google_creds_raw) if google_creds_raw else {}
+
+    wrote_temp_file = False
+    if google_creds:
+        try:
+            with open(SERVICE_ACCOUNT_FILE, "w", encoding="utf-8") as f:
+                json.dump(google_creds, f, ensure_ascii=False, indent=2)
+            wrote_temp_file = True
+        except Exception as e:
+            st.error(f"Impossible d'écrire {SERVICE_ACCOUNT_FILE}: {e}")
+            return None
+
+    if not os.path.exists(SERVICE_ACCOUNT_FILE):
+        st.error("⚠️ credentials.json introuvable et st.secrets['google_credentials'] absent.")
         return None
 
-    with st.spinner("🔎 Test du chargement Google Drive..."):
-        try:
-            # Si on a un dict, on le passe directement au loader (certaines implémentations acceptent dict)
-            # Sinon on passe le chemin vers credentials.json
-            service_account_key_param = service_account_info if service_account_info else "credentials.json"
+    try:
+        with st.spinner("🔎 Chargement Google Drive..."):
+            # Essai A — passer un chemin (str) via service_account_key
+            docs = []
+            try:
+                loader = GoogleDriveLoader(
+                    folder_id=FOLDER_ID,
+                    file_types=["document", "pdf"],
+                    service_account_key=str(SERVICE_ACCOUNT_FILE),  # chemin attendu par ta version
+                    recursive=True
+                )
+                docs = loader.load()
+            except Exception as e1:
+                st.warning(f"GoogleDriveLoader (service_account_key) a échoué: {e1}")
 
-            loader = GoogleDriveLoader(
-                folder_id=FOLDER_ID,
-                file_types=["document", "pdf"],  # uniquement Google Docs et PDF
-                service_account_key=service_account_key_param,
-                recursive=True
-            )
-            docs = loader.load()
-
-            # Diagnostic : affichage des fichiers trouvés
-            st.write(f"📂 Nombre de documents trouvés: {len(docs)}")
-            for d in docs:
-                st.write("➡️ Fichier:", d.metadata)
-
+            # Fallback manuel si le loader ne retourne rien
             if not docs:
-                st.warning("📂 Aucun document trouvé dans le dossier Google Drive.")
+                st.info("Fallback : téléchargement manuel via Google Drive API...")
+                SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
+                creds = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+                service = build("drive", "v3", credentials=creds)
+
+                # Lister les fichiers du dossier
+                resp = service.files().list(
+                    q=f"'{FOLDER_ID}' in parents and trashed = false",
+                    fields="files(id,name,mimeType)",
+                    pageSize=500,
+                    includeItemsFromAllDrives=True,
+                    supportsAllDrives=True
+                ).execute()
+                files = resp.get("files", [])
+
+                docs = []
+                for f in files:
+                    fid = f["id"]
+                    name = f.get("name", "")
+                    mime = f.get("mimeType", "")
+                    try:
+                        if mime == "application/vnd.google-apps.document":
+                            exported = service.files().export(fileId=fid, mimeType="text/plain").execute()
+                            text = exported.decode("utf-8") if isinstance(exported, bytes) else str(exported)
+                        elif mime == "application/pdf":
+                            data = service.files().get_media(fileId=fid).execute()
+                            reader = PdfReader(BytesIO(data))
+                            text = ""
+                            for page in reader.pages:
+                                text += page.extract_text() or ""
+                            if not text.strip():
+                                text = f"[PDF sans texte exploitable] {name}"
+                        else:
+                            try:
+                                exported = service.files().export(fileId=fid, mimeType="text/plain").execute()
+                                text = exported.decode("utf-8") if isinstance(exported, bytes) else str(exported)
+                            except Exception:
+                                text = f"[Type non supporté: {mime}] {name}"
+                        docs.append(Document(page_content=text, metadata={"id": fid, "name": name, "mimeType": mime}))
+                    except Exception as e:
+                        st.warning(f"Erreur téléchargement fichier {name} ({fid}): {e}")
+
+            st.write(f"📂 Nombre de documents prêts à être indexés: {len(docs)}")
+            if not docs:
+                st.warning("📂 Aucun document exploitable trouvé.")
                 return None
 
-            text_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=1000,
-                chunk_overlap=200
-            )
+            # Découpage + indexation
+            text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
             splits = text_splitter.split_documents(docs)
 
             embeddings = HuggingFaceEmbeddings(
@@ -116,49 +175,49 @@ def initialize_knowledge_base():
             )
 
             vectorstore = FAISS.from_documents(splits, embeddings)
-
             st.success(f"✅ {len(docs)} documents chargés et indexés!")
             return vectorstore
 
-        except Exception as e:
-            st.error(f"❌ Erreur lors de l'initialisation: {str(e)}")
-            return None
+    except Exception as e:
+        st.error(f"❌ Erreur lors de l'initialisation: {str(e)}")
+        return None
+
+    finally:
+        # Nettoyage : supprimer credentials.json s’il vient de st.secrets (optionnel)
+        try:
+            if wrote_temp_file and os.path.exists(SERVICE_ACCOUNT_FILE):
+                os.remove(SERVICE_ACCOUNT_FILE)
+        except Exception:
+            pass
 
 # --- DIAGNOSTIC GOOGLE DRIVE (UI) ---
 def drive_diagnostic_ui():
     st.sidebar.header("Diagnostic Google Drive")
-    st.sidebar.write("Utilise ce diagnostic pour vérifier que `st.secrets` et le compte de service sont corrects.")
+    st.sidebar.write("Vérifie les secrets et l'accès du compte de service au dossier Drive.")
     if st.sidebar.button("Run Drive diagnostic"):
         st.subheader("Diagnostic secrets et test Google Drive")
         app_conf = st.secrets.get("app_config", {})
         google_creds_raw = st.secrets.get("google_credentials", {})
 
-        st.write("app_config keys:", list(app_conf.keys()))
-        # Affiche les clés présentes dans google_credentials (masquées)
+        # Conversion sûre AttrDict -> dict
         try:
             google_creds = json.loads(json.dumps(google_creds_raw)) if google_creds_raw else {}
         except Exception:
             google_creds = dict(google_creds_raw) if google_creds_raw else {}
 
+        st.write("app_config keys:", list(app_conf.keys()))
         st.write("google_credentials keys:", list(google_creds.keys()))
-        st.write("Valeurs masquées utiles pour debug")
         st.write("GOOGLE_DRIVE_FOLDER_ID:", mask(app_conf.get("GOOGLE_DRIVE_FOLDER_ID", "")))
-        st.write("HUGGINGFACE_TOKEN:", mask(app_conf.get("HUGGINGFACE_TOKEN", "")))
         st.write("client_email:", mask(google_creds.get("client_email", "")))
-        st.write("project_id:", mask(google_creds.get("project_id", "")))
-        st.write("private_key_id:", mask(google_creds.get("private_key_id", "")))
 
-        # Utiliser directement from_service_account_info (pas d'écriture de fichier)
         if not google_creds:
-            st.error("Aucun google_credentials trouvé dans st.secrets.")
+            st.error("Aucun google_credentials trouvé.")
             return
 
         FOLDER_ID_LOCAL = app_conf.get("GOOGLE_DRIVE_FOLDER_ID", "")
         if not FOLDER_ID_LOCAL:
-            st.warning("Aucun FOLDER_ID trouvé dans app_config. Vérifie st.secrets.")
+            st.warning("Aucun FOLDER_ID trouvé.")
             return
-
-        st.info(f"Test de listing du dossier {mask(FOLDER_ID_LOCAL, 8, 8)}")
 
         SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
         try:
