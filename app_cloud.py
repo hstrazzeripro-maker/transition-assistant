@@ -15,7 +15,7 @@ except ImportError:
              "Ajoutez-le dans requirements.txt :\n\nlangchain-google-community")
     GoogleDriveLoader = None  # fallback pour éviter le crash
 
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings, HuggingFaceHub
 from langchain_community.vectorstores import FAISS
 from langchain.chains import create_retrieval_chain
