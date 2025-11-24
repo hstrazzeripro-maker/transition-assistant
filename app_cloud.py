@@ -1,6 +1,7 @@
 """
 Application Transition Assistant - Version Cloud
-Inclut diagnostic Google Drive et extraction texte des PDF avec pypdf
+Inclut diagnostic Google Drive, extraction texte des PDF avec pypdf,
+et compatibilité LangChain 0.2+ (retriever.invoke).
 """
 
 import streamlit as st
@@ -15,7 +16,7 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_huggingface import HuggingFaceEndpoint
 from langchain_community.vectorstores import FAISS
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.documents import Document  # ✅ import corrigé
+from langchain_core.documents import Document  # Compatible LC 0.2+
 
 # Imports Drive + PDF
 from google.oauth2 import service_account
@@ -80,7 +81,7 @@ def get_llm():
 # --- INITIALISATION DE LA BASE DE CONNAISSANCES ---
 @st.cache_resource
 def initialize_knowledge_base():
-    # 1) Forcer l’écriture locale du credentials.json depuis st.secrets si dispo
+    # 1) Forcer l’écriture locale de credentials.json depuis st.secrets si dispo
     google_creds_raw = st.secrets.get("google_credentials", {})
     try:
         google_creds = json.loads(json.dumps(google_creds_raw)) if google_creds_raw else {}
@@ -109,7 +110,7 @@ def initialize_knowledge_base():
                 loader = GoogleDriveLoader(
                     folder_id=FOLDER_ID,
                     file_types=["document", "pdf"],
-                    service_account_key=str(SERVICE_ACCOUNT_FILE),  # chemin attendu par ta version
+                    service_account_key=str(SERVICE_ACCOUNT_FILE),  # chemin attendu
                     recursive=True
                 )
                 docs = loader.load()
@@ -252,6 +253,7 @@ llm = get_llm()
 if llm:
     vectorstore = initialize_knowledge_base()
     if vectorstore:
+        # Création du retriever (LC 0.2+ compatible)
         retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
 
         system_prompt = """
@@ -276,8 +278,9 @@ if llm:
 
         chain = prompt | llm
 
+        # ✅ LC 0.2+: utiliser retriever.invoke au lieu de get_relevant_documents
         def answer_question(user_input: str) -> str:
-            docs = retriever.get_relevant_documents(user_input)
+            docs = retriever.invoke(user_input)  # List[Document]
             context = "\n\n".join([d.page_content or "" for d in docs]) if docs else "No context available."
             result = chain.invoke({"input": user_input, "context": context})
             return getattr(result, "content", str(result))
