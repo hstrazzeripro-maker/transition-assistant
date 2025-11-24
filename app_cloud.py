@@ -1,5 +1,5 @@
 """
-Application Transition Assistant - Version Cloud (corrigée, Google Docs + PDF uniquement)
+Application Transition Assistant - Version Cloud (corrigée, Google Docs + PDF uniquement, avec diagnostic Google Drive)
 """
 
 import streamlit as st
@@ -58,14 +58,14 @@ def get_llm():
             st.warning("⚠️ Ni Hugging Face ni Ollama configurés")
             return None
 
-# --- INITIALISATION DE LA BASE DE CONNAISSANCES ---
+# --- INITIALISATION DE LA BASE DE CONNAISSANCES (avec diagnostic) ---
 @st.cache_resource
 def initialize_knowledge_base():
     if not os.path.exists(SERVICE_ACCOUNT_FILE):
         st.error(f"⚠️ Fichier '{SERVICE_ACCOUNT_FILE}' introuvable (vérifiez vos secrets Streamlit).")
         return None
 
-    with st.spinner("🔄 Chargement de la base de connaissances..."):
+    with st.spinner("🔎 Test du chargement Google Drive..."):
         try:
             loader = GoogleDriveLoader(
                 folder_id=FOLDER_ID,
@@ -74,6 +74,12 @@ def initialize_knowledge_base():
                 recursive=True
             )
             docs = loader.load()
+
+            # 👉 Diagnostic : affichage des fichiers trouvés
+            st.write(f"📂 Nombre de documents trouvés: {len(docs)}")
+            for d in docs:
+                st.write("➡️ Fichier:", d.metadata)
+
             if not docs:
                 st.warning("📂 Aucun document trouvé dans le dossier Google Drive.")
                 return None
