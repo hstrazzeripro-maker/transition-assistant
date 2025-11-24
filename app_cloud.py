@@ -38,12 +38,10 @@ def get_llm():
                 repo_id="mistralai/Mistral-7B-Instruct-v0.2",
                 huggingfacehub_api_token=HUGGINGFACE_TOKEN,
                 task="text-generation",
-                model_kwargs={
-                    "temperature": 0.1,
-                    "max_new_tokens": 512,
-                    "top_p": 0.95,
-                    "repetition_penalty": 1.1
-                }
+                temperature=0.1,
+                max_new_tokens=512,
+                top_p=0.95,
+                repetition_penalty=1.1
             )
             st.success("✅ Modèle cloud Hugging Face connecté")
             return llm
