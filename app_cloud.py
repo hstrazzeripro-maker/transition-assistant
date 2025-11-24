@@ -1,7 +1,7 @@
 """
 Application Transition Assistant - Version Cloud
 Inclut diagnostic Google Drive, extraction texte des PDF avec pypdf,
-et compatibilité LangChain 0.2+ (retriever.invoke).
+compatibilité LangChain 0.2+ (retriever.invoke), et Hugging Face (task=conversational).
 """
 
 import streamlit as st
@@ -13,10 +13,10 @@ from io import BytesIO
 from langchain_google_community import GoogleDriveLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_huggingface import HuggingFaceEndpoint
+from langchain_huggingface import HuggingFaceEndpoint, ChatHuggingFace
 from langchain_community.vectorstores import FAISS
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.documents import Document  # Compatible LC 0.2+
+from langchain_core.documents import Document
 
 # Imports Drive + PDF
 from google.oauth2 import service_account
@@ -54,16 +54,18 @@ def mask(s: Optional[str], keep_start: int = 6, keep_end: int = 6) -> Optional[s
 def get_llm():
     if HUGGINGFACE_TOKEN:
         try:
-            llm = HuggingFaceEndpoint(
+            # Provider impose "conversational": on aligne la task et on enveloppe en ChatHuggingFace
+            endpoint = HuggingFaceEndpoint(
                 repo_id="mistralai/Mistral-7B-Instruct-v0.2",
                 huggingfacehub_api_token=HUGGINGFACE_TOKEN,
-                task="text-generation",
+                task="conversational",            # ✅ corrige l'erreur provider/task
                 temperature=0.1,
                 max_new_tokens=512,
                 top_p=0.95,
                 repetition_penalty=1.1
             )
-            st.success("✅ Modèle cloud Hugging Face connecté")
+            llm = ChatHuggingFace(llm=endpoint)
+            st.success("✅ Modèle Hugging Face connecté (conversational)")
             return llm
         except Exception as e:
             st.error(f"❌ Erreur Hugging Face: {str(e)}")
