@@ -1,0 +1,28 @@
+# --- Base ---
+streamlit
+
+# --- LangChain Core ---
+langchain
+langchain-community
+langchain-core
+
+# --- Connecteurs spécifiques ---
+langchain-google-community
+langchain-huggingface
+
+# --- Vector store ---
+faiss-cpu
+
+# --- Embeddings ---
+sentence-transformers
+huggingface_hub
+
+# --- Google API (pour Drive) ---
+google-api-python-client
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
+
+# --- Utilitaires ---
+numpy
+pandas
