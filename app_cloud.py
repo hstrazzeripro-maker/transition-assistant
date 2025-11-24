@@ -15,7 +15,7 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_huggingface import HuggingFaceEndpoint
 from langchain_community.vectorstores import FAISS
 from langchain_core.prompts import ChatPromptTemplate
-from langchain.schema import Document
+from langchain_core.documents import Document  # ✅ import corrigé
 
 # Imports Drive + PDF
 from google.oauth2 import service_account
