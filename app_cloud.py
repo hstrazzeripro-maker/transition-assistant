@@ -1,5 +1,6 @@
 """
-Application Transition Assistant - Version Cloud (corrigée, Google Docs + PDF uniquement, diagnostic Google Drive)
+Application Transition Assistant - Version Cloud
+Inclut diagnostic Google Drive et écriture temporaire de credentials.json
 """
 
 import streamlit as st
@@ -22,7 +23,6 @@ from googleapiclient.discovery import build
 IS_CLOUD = 'STREAMLIT_CLOUD' in os.environ or ('google_credentials' in st.secrets)
 
 if IS_CLOUD:
-    # st.secrets['google_credentials'] est souvent un AttrDict ; on le convertit en dict pur quand nécessaire
     creds_raw = st.secrets.get('google_credentials', {})
     try:
         creds_dict = json.loads(json.dumps(creds_raw)) if creds_raw else {}
@@ -34,6 +34,8 @@ else:
     creds_dict = {}
     FOLDER_ID = os.getenv('GOOGLE_DRIVE_FOLDER_ID', 'VOTRE_FOLDER_ID')
     HUGGINGFACE_TOKEN = os.getenv('HUGGINGFACEHUB_API_TOKEN', None)
+
+SERVICE_ACCOUNT_FILE = "credentials.json"
 
 # --- UTILITAIRES ---
 def mask(s: Optional[str], keep_start: int = 6, keep_end: int = 6) -> Optional[str]:
@@ -72,25 +74,33 @@ def get_llm():
             st.warning("⚠️ Ni Hugging Face ni Ollama configurés")
             return None
 
-# --- INITIALISATION DE LA BASE DE CONNAISSANCES (avec diagnostic) ---
+# --- INITIALISATION DE LA BASE DE CONNAISSANCES (avec écriture temporaire de credentials.json) ---
 @st.cache_resource
 def initialize_knowledge_base():
-    # On utilise creds_dict (dict pur) si disponible, sinon on essaie de lire credentials.json local
-    service_account_info = creds_dict if creds_dict else None
-    if not service_account_info and not os.path.exists("credentials.json"):
-        st.error("⚠️ Aucun credentials disponible (st.secrets['google_credentials'] manquant et credentials.json absent).")
-        return None
+    # Préparer la source des credentials : dict depuis st.secrets ou fichier local existant
+    google_creds = creds_dict if creds_dict else None
+    wrote_temp_file = False
 
-    with st.spinner("🔎 Test du chargement Google Drive..."):
+    # Si on a un dict, écrire temporairement credentials.json (nécessaire pour GoogleDriveLoader)
+    if google_creds:
         try:
-            # Si on a un dict, on le passe directement au loader (certaines implémentations acceptent dict)
-            # Sinon on passe le chemin vers credentials.json
-            service_account_key_param = service_account_info if service_account_info else "credentials.json"
+            with open(SERVICE_ACCOUNT_FILE, "w") as f:
+                json.dump(google_creds, f, indent=2)
+            wrote_temp_file = True
+        except Exception as e:
+            st.error(f"Impossible d'écrire {SERVICE_ACCOUNT_FILE}: {e}")
+            return None
+    else:
+        if not os.path.exists(SERVICE_ACCOUNT_FILE):
+            st.error("⚠️ Aucun credentials disponible (st.secrets['google_credentials'] manquant et credentials.json absent).")
+            return None
 
+    try:
+        with st.spinner("🔎 Test du chargement Google Drive..."):
             loader = GoogleDriveLoader(
                 folder_id=FOLDER_ID,
                 file_types=["document", "pdf"],  # uniquement Google Docs et PDF
-                service_account_key=service_account_key_param,
+                service_account_key=SERVICE_ACCOUNT_FILE,  # chemin vers le fichier JSON
                 recursive=True
             )
             docs = loader.load()
@@ -120,9 +130,18 @@ def initialize_knowledge_base():
             st.success(f"✅ {len(docs)} documents chargés et indexés!")
             return vectorstore
 
-        except Exception as e:
-            st.error(f"❌ Erreur lors de l'initialisation: {str(e)}")
-            return None
+    except Exception as e:
+        st.error(f"❌ Erreur lors de l'initialisation: {str(e)}")
+        return None
+
+    finally:
+        # Nettoyage : supprimer le fichier credentials.json si on l'a écrit depuis st.secrets
+        try:
+            if wrote_temp_file and os.path.exists(SERVICE_ACCOUNT_FILE):
+                os.remove(SERVICE_ACCOUNT_FILE)
+        except Exception:
+            # Ne pas bloquer l'exécution si la suppression échoue
+            pass
 
 # --- DIAGNOSTIC GOOGLE DRIVE (UI) ---
 def drive_diagnostic_ui():
@@ -134,7 +153,6 @@ def drive_diagnostic_ui():
         google_creds_raw = st.secrets.get("google_credentials", {})
 
         st.write("app_config keys:", list(app_conf.keys()))
-        # Affiche les clés présentes dans google_credentials (masquées)
         try:
             google_creds = json.loads(json.dumps(google_creds_raw)) if google_creds_raw else {}
         except Exception:
@@ -148,7 +166,6 @@ def drive_diagnostic_ui():
         st.write("project_id:", mask(google_creds.get("project_id", "")))
         st.write("private_key_id:", mask(google_creds.get("private_key_id", "")))
 
-        # Utiliser directement from_service_account_info (pas d'écriture de fichier)
         if not google_creds:
             st.error("Aucun google_credentials trouvé dans st.secrets.")
             return
