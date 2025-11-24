@@ -7,7 +7,14 @@ import streamlit as st
 import os
 import json
 from pathlib import Path
-from langchain_google_community import GoogleDriveLoader
+# Essayer d'importer GoogleDriveLoader
+try:
+    from langchain_google_community import GoogleDriveLoader
+except ImportError:
+    st.error("❌ Le module 'langchain-google-community' n'est pas installé. "
+             "Ajoutez-le dans requirements.txt :\n\nlangchain-google-community")
+    GoogleDriveLoader = None  # fallback pour éviter le crash
+
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings, HuggingFaceHub
 from langchain_community.vectorstores import FAISS
@@ -274,6 +281,9 @@ def initialize_knowledge_base():
     """
     Charge les documents du Google Drive et crée l'index de recherche
     """
+    if GoogleDriveLoader is None:
+        st.warning("⚠️ GoogleDriveLoader indisponible. Vérifiez votre requirements.txt.")
+    return None
     if not os.path.exists(SERVICE_ACCOUNT_FILE):
         st.error(f"⚠️ Fichier '{SERVICE_ACCOUNT_FILE}' introuvable")
         
