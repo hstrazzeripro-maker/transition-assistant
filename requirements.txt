@@ -3,12 +3,13 @@ streamlit
 
 # --- LangChain Core ---
 langchain
-langchain-community
 langchain-core
+langchain-community
 
 # --- Connecteurs spécifiques ---
 langchain-google-community
 langchain-huggingface
+langchain-text-splitters
 
 # --- Vector store ---
 faiss-cpu
