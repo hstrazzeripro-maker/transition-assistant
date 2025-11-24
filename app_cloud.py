@@ -19,7 +19,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.llms import HuggingFaceHub
 from langchain_community.vectorstores import FAISS
-from langchain.chains import RetrievalQA
+from langchain.chains.retrieval_qa.base import RetrievalQA
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate
 import time
@@ -358,7 +358,15 @@ with col2:
         if vectorstore:
             # Configuration RAG
             retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
-            
+            qa_chain = RetrievalQA.from_chain_type(
+                llm=llm,
+                retriever=retriever,
+                chain_type="stuff"
+            )
+            response = qa_chain.run(user_input)
+            answer = qa_chain.run(user_input)
+            st.markdown(answer)
+            st.session_state.messages.append({"role": "assistant", "content": answer})
             # Prompt système
             system_prompt = """
             You are an expert assistant for elite athlete career transition.
