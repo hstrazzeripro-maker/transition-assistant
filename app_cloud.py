@@ -224,6 +224,4 @@ def drive_diagnostic_ui():
             ).execute()
 
             files = resp.get("files", [])
-            st.write("Nombre de fichiers trouvés:", len(files))
-            if files:
-                st.table([{"
+            st.write("Nombre de fichiers trouvés:", len
