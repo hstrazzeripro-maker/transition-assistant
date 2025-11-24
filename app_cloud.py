@@ -1,3 +1,7 @@
+"""
+Application Transition Assistant - Version Cloud (corrigée, Google Docs + PDF uniquement)
+"""
+
 import streamlit as st
 import os
 import json
@@ -10,6 +14,7 @@ from langchain_community.llms import HuggingFaceHub
 from langchain_community.vectorstores import FAISS
 from langchain_core.prompts import ChatPromptTemplate
 
+# --- CONFIGURATION CLOUD / SECRETS ---
 IS_CLOUD = 'STREAMLIT_CLOUD' in os.environ or ('google_credentials' in st.secrets)
 
 if IS_CLOUD:
@@ -25,6 +30,7 @@ else:
 
 SERVICE_ACCOUNT_FILE = "credentials.json"
 
+# --- CONFIGURATION DU MODÈLE ---
 @st.cache_resource
 def get_llm():
     if HUGGINGFACE_TOKEN:
@@ -49,38 +55,50 @@ def get_llm():
             st.warning("⚠️ Ni Hugging Face ni Ollama configurés")
             return None
 
+# --- INITIALISATION DE LA BASE DE CONNAISSANCES ---
 @st.cache_resource
 def initialize_knowledge_base():
     if not os.path.exists(SERVICE_ACCOUNT_FILE):
         st.error(f"⚠️ Fichier '{SERVICE_ACCOUNT_FILE}' introuvable")
         return None
-    try:
-        loader = GoogleDriveLoader(
-            folder_id=FOLDER_ID,
-            file_types=["docx", "doc", "pdf", "txt"],
-            service_account_key=SERVICE_ACCOUNT_FILE,
-            recursive=True
-        )
-        docs = loader.load()
-        if not docs:
-            st.warning("📂 Aucun document trouvé")
+
+    with st.spinner("🔄 Chargement de la base de connaissances..."):
+        try:
+            loader = GoogleDriveLoader(
+                folder_id=FOLDER_ID,
+                file_types=["document", "pdf"],  # uniquement Google Docs et PDF
+                service_account_key=SERVICE_ACCOUNT_FILE,
+                recursive=True
+            )
+            docs = loader.load()
+            if not docs:
+                st.warning("📂 Aucun document trouvé dans le dossier Google Drive.")
+                return None
+
+            # Découpage en chunks
+            text_splitter = RecursiveCharacterTextSplitter(
+                chunk_size=1000,
+                chunk_overlap=200
+            )
+            splits = text_splitter.split_documents(docs)
+
+            # Embeddings Hugging Face
+            embeddings = HuggingFaceEmbeddings(
+                model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+                model_kwargs={'device': 'cpu'}
+            )
+
+            # Vectorstore FAISS
+            vectorstore = FAISS.from_documents(splits, embeddings)
+
+            st.success(f"✅ {len(docs)} documents chargés et indexés!")
+            return vectorstore
+
+        except Exception as e:
+            st.error(f"❌ Erreur lors de l'initialisation: {str(e)}")
             return None
 
-        splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-        splits = splitter.split_documents(docs)
-
-        embeddings = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
-            model_kwargs={'device': 'cpu'}
-        )
-
-        vectorstore = FAISS.from_documents(splits, embeddings)
-        st.success(f"✅ {len(docs)} documents chargés et indexés!")
-        return vectorstore
-    except Exception as e:
-        st.error(f"❌ Erreur: {str(e)}")
-        return None
-
+# --- INTERFACE PRINCIPALE ---
 st.set_page_config(page_title="Transition Assistant | Elite Athletes", page_icon="🏅", layout="wide")
 
 llm = get_llm()
