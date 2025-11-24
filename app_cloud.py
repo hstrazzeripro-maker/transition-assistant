@@ -19,7 +19,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.llms import HuggingFaceHub
 from langchain_community.vectorstores import FAISS
-from langchain.chains.retrieval import create_retrieval_chain
+from langchain.chains import RetrievalQA
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate
 import time
@@ -378,7 +378,12 @@ with col2:
             ])
             
             question_answer_chain = create_stuff_documents_chain(llm, prompt)
-            rag_chain = create_retrieval_chain(retriever, question_answer_chain)
+            rag_chain = RetrievalQA.from_chain_type(
+                llm=llm,
+                retriever=retriever,
+                chain_type="stuff"
+            )
+
             
             # --- CHAT INTERFACE ---
             
